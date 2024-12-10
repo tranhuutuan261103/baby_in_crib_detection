@@ -93,6 +93,9 @@ def save_file_to_firestore(file_path: str, file_name: str):
         
         # Upload the file to the storage bucket
         blob.upload_from_filename(file_path)
+
+        # make the file public
+        blob.make_public()
         
         # Get the URL of the uploaded file
         url = blob.public_url

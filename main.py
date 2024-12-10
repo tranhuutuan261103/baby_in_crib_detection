@@ -3,6 +3,7 @@ import threading
 import base64
 import numpy as np
 import cv2
+from datetime import datetime
 from PIL import Image
 from io import BytesIO
 from time import time
@@ -43,7 +44,13 @@ def start_video_recording(user_id):
 
     with locks[user_id]:
         recording_states[user_id] = True
-        video_filename = os.path.join(video_folder, f"{user_id}_video.mp4")
+
+        # Tạo tên file video với ID và timestamp
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
+        print(f"Starting video recording for user {user_id}... {timestamp}")
+        
+        video_filename = os.path.join(video_folder, f"{user_id}_video_{timestamp}.mp4")
 
         # Initialize VideoWriter
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -64,10 +71,15 @@ def save_video(user_id):
 
     with locks[user_id]:
         if user_id in video_writers and video_writers[user_id]:
+            # Đóng VideoWriter hiện tại
             video_writers[user_id].release()
             print(f"Video saved for user {user_id}.")
+        else:
+            print(f"No video to save for user {user_id}.")
         
-        reset_video_recording(user_id)
+        # Chỉ cấp phát lại nếu người dùng vẫn đang ghi hình
+        if recording_states.get(user_id, False):
+            start_video_recording(user_id)
 
 def reset_video_recording(user_id):
     """Resets recording state for a specific user."""
@@ -140,6 +152,10 @@ def handle_video(data):
 @socketio.on('stop_recording')
 def handle_stop_recording(data):
     user_id = data.get('user_id', 'unknown')
+    print(f"Received stop_recording event for user {user_id}.")
+    save_video(user_id)
+
+def handle_stop_recording2(user_id):
     print(f"Received stop_recording event for user {user_id}.")
     save_video(user_id)
 
