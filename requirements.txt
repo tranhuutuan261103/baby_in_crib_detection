@@ -2,4 +2,5 @@ opencv-python==4.10.0.84
 mediapipe==0.10.14
 ultralytics==8.2.87
 flask_socketio==5.4.1
+flask_cors==5.0.0
 firebase_admin==6.6.0
