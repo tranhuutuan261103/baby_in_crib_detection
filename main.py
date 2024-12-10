@@ -14,7 +14,7 @@ app = Flask(__name__)
 from controllers.baby_in_crib_detection_controller import bicd_bp
 app.register_blueprint(bicd_bp)
 
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(app)
 
 # Video storage folder
