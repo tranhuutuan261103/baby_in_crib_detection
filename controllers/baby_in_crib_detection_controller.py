@@ -3,6 +3,7 @@ import os
 import cv2
 import numpy as np
 import requests
+import glob
 from datetime import datetime, timezone, timedelta
 
 # Import services
@@ -22,9 +23,9 @@ babyInCribDetectionService = BabyInCribDetectionService()
 def stop_recording_event(user_id: str):
     try:
         # Import socketio locally to avoid circular import
-        from main import socketio
+        from main import handle_stop_recording2
         
-        socketio.emit('stop_recording', {"user_id": user_id})
+        handle_stop_recording2(user_id)
     except Exception as e:
         print(f"Error emitting tests event: {e}")
 
@@ -76,6 +77,9 @@ def predict_baby_in_crib_detection():
         # Gọi dịch vụ dự đoán
         result = babyInCribDetectionService.predict(image)
 
+        video_files = glob.glob(os.path.join(video_folder, f"{system_id}_video_*.mp4"))
+        latest_video_file = max(video_files, key=os.path.getctime)  # File mới nhất theo thời gian
+
         stop_recording_event(system_id)
 
         video_url = None
@@ -85,7 +89,14 @@ def predict_baby_in_crib_detection():
         if result["id"] == 0:
             save_log_to_firestore("image_crib", image_url, "Baby is not in crib", system_id, timestamp)
             try:
-                video_url = save_file_to_firestore(os.path.join(video_folder, f"{system_id}_video.mp4"), f"iot/{system_id}/video_{datetime.now().strftime('%Y%m%d%H%M%S')}.mp4")
+                if latest_video_file:
+                    video_url = save_file_to_firestore(
+                        latest_video_file, 
+                        f"iot/{system_id}/video_{os.path.basename(latest_video_file)}"
+                    )
+                else:
+                    print(f"No video found for system_id: {system_id}")
+                    video_url = None
                 if video_url is None:
                     print("Error saving video to Firestore")
                 save_log_to_firestore("video_crib", video_url, f"Error {result['message']}", system_id, (datetime.now(timezone.utc) + timedelta(hours=7)).strftime('%Y-%m-%dT%H:%M:%S.000'))
