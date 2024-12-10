@@ -27,14 +27,15 @@ def save_log_to_firestore(type: str, file_name: str, result: str, account_id: st
     except Exception as e:
         print(f"Exception: {str(e)}")
 
-def save_notification_to_firebase(message: str, account_id: str, timestamp: str):
+def save_notification_to_firebase(message: str, account_id: str, timestamp: str, video_url: str = None):
     try:
         # Reference to the `logs` node
         notifications_ref = db.reference(f'notification/{account_id}')
         
         notifications_ref.push({
             'content': message,
-            'createAt': timestamp
+            'createAt': timestamp,
+            'videoURL': video_url
         })
     except Exception as e:
         print(f"Exception: {str(e)}")
