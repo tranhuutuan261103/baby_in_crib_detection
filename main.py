@@ -33,6 +33,7 @@ os.makedirs(video_folder, exist_ok=True)
 video_writers = {}       # {system_id: VideoWriter}
 video_frames = {}        # {system_id: []}
 video_frames_cache = {}  # {system_id: []}
+video_frames_stream = {} # {system_id: []}
 image_frame = {}         # {system_id: Image}
 recording_states = {}    # {system_id: bool}
 last_time = {}           # {system_id: float (timestamp)}
@@ -103,7 +104,7 @@ def reset_video_recording(system_id):
 
 def handle_video_data(data, system_id):
     """Processes incoming video data for a specific user."""
-    global video_writers, video_frames, last_time, locks, image_frame
+    global video_writers, video_frames, video_frames_cache, video_frames_stream, last_time, locks, image_frame
 
     if 'image' not in data or not data['image']:
         print(f"Error: No image data received for user {system_id}.")
@@ -129,7 +130,10 @@ def handle_video_data(data, system_id):
         frame = np.array(image)
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-        current_time = time()
+        if system_id not in video_frames_stream:
+            video_frames_stream[system_id] = []
+        video_frames_stream[system_id].append(frame)
+        
         with locks[system_id]:
             # Only process the frame if sufficient time has passed
             # if current_time - last_time.get(system_id, 0) >= FRAME_INTERVAL:
@@ -162,7 +166,7 @@ def handle_start_recording(data: dict):
 
 def detection_thread(system_id: str):
     try:
-        socketio.sleep(15)
+        socketio.sleep(5)
         while True:
             socketio.sleep(1)
             with locks[system_id]:
@@ -296,24 +300,23 @@ def handle_connect():
 
 @app.route('/video_streaming/<system_id>')
 def video_streaming(system_id):
-    if system_id not in video_frames:
+    if system_id not in video_frames_stream:
         return Response("User not found", status=404)
     return Response(video_stream(system_id), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 def video_stream(system_id):
-    global video_frames, locks
+    global video_frames_stream, locks
 
     while True:
-        if system_id not in video_frames:
+        if system_id not in video_frames_stream:
             continue
 
-        with locks[system_id]:
-            if len(video_frames[system_id]) == 0:
-                continue
+        if len(video_frames_stream[system_id]) == 0:
+            continue
 
-            frame = video_frames[system_id].pop(0)
-            _, buffer = cv2.imencode('.jpg', frame)
-            frame_bytes = buffer.tobytes()
+        frame = video_frames_stream[system_id].pop(0)
+        _, buffer = cv2.imencode('.jpg', frame)
+        frame_bytes = buffer.tobytes()
 
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
