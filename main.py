@@ -62,7 +62,7 @@ def start_video_recording(system_id):
         video_filename = os.path.join(video_folder, f"{system_id}_video_{timestamp}.mp4")
 
         # Initialize VideoWriter
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc = cv2.VideoWriter_fourcc(*'H264')
         video_writers[system_id] = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
 
         if not video_writers[system_id].isOpened():
@@ -198,7 +198,7 @@ def detection_thread(system_id: str):
                 video_filename = os.path.join(video_folder, f"{system_id}_video_{timestamp}.mp4")
 
                 # Initialize VideoWriter
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                fourcc = cv2.VideoWriter_fourcc(*'H264')
                 video_writer_cache = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
 
                 if not video_writer_cache.isOpened():
