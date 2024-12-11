@@ -1,11 +1,14 @@
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Tắt log của TensorFlow (nếu được sử dụng)
+from absl import logging
+logging.set_verbosity(logging.ERROR)  # Chỉ hiển thị log mức ERROR
 from ultralytics import YOLO
 import mediapipe as mp
 
 class BabyInCribDetection:
     def __init__(self):
         self.current_path = os.path.dirname(os.path.realpath(__file__))
-        self.model = YOLO(os.path.join(self.current_path, "best_models", "last.pt"))
+        self.model = YOLO(os.path.join(self.current_path, "best_models", "last.pt"), verbose=False)
 
     def detect(self, image) -> int:
         # Khởi tạo MediaPipe Pose

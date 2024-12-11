@@ -23,9 +23,9 @@ babyInCribDetectionService = BabyInCribDetectionService()
 def stop_recording_event(user_id: str):
     try:
         # Import socketio locally to avoid circular import
-        from main import handle_stop_recording2
+        from main import handle_stop_recording
         
-        handle_stop_recording2(user_id)
+        handle_stop_recording(user_id)
     except Exception as e:
         print(f"Error emitting tests event: {e}")
 
@@ -80,7 +80,7 @@ def predict_baby_in_crib_detection():
         video_files = glob.glob(os.path.join(video_folder, f"{system_id}_video_*.mp4"))
         latest_video_file = max(video_files, key=os.path.getctime)  # File mới nhất theo thời gian
 
-        stop_recording_event(system_id)
+        # stop_recording_event(system_id)
 
         video_url = None
 
