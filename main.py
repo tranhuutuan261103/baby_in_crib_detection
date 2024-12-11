@@ -3,13 +3,18 @@ import threading
 import base64
 import numpy as np
 import cv2
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from PIL import Image
 from io import BytesIO
 from time import time
 from flask import Flask, Response, request, send_file
 from flask_cors import CORS
 from flask_socketio import SocketIO
+
+from services.baby_in_crib_detection_service import BabyInCribDetectionService
+from services.firebase_helper import get_account_infos_by_id, save_file_to_firestore, data_observer, save_log_to_firestore, send_notification_to_device, save_notification_to_firebase
+
+babyInCribDetectionService = BabyInCribDetectionService()
 
 app = Flask(__name__)
 from controllers.baby_in_crib_detection_controller import bicd_bp
@@ -18,88 +23,90 @@ app.register_blueprint(bicd_bp)
 CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(app)
 
-# Video storage folder
+image_folder = "media/crib_images/"
+os.makedirs(image_folder, exist_ok=True)
+
 video_folder = "media/videos/"
-if not os.path.exists(video_folder):
-    os.makedirs(video_folder)
+os.makedirs(video_folder, exist_ok=True)
 
 # User-specific data
-video_writers = {}       # {user_id: VideoWriter}
-video_frames = {}        # {user_id: []}
-video_frames_cache = {}  # {user_id: []}
-image_frame = {}         # {user_id: Image}
-recording_states = {}    # {user_id: bool}
-last_time = {}           # {user_id: float (timestamp)}
-locks = {}               # {user_id: threading.Lock}
+video_writers = {}       # {system_id: VideoWriter}
+video_frames = {}        # {system_id: []}
+video_frames_cache = {}  # {system_id: []}
+image_frame = {}         # {system_id: Image}
+recording_states = {}    # {system_id: bool}
+last_time = {}           # {system_id: float (timestamp)}
+locks = {}               # {system_id: threading.Lock}
 
-FRAME_INTERVAL = 1 / 30  # 30 FPS
+image_folder = "media/crib_images/"
+os.makedirs(image_folder, exist_ok=True)
 
 # Helper Functions
-def start_video_recording(user_id):
+def start_video_recording(system_id):
     """Starts video recording for a specific user."""
     global video_writers, recording_states, locks
 
     # Ensure lock for the user
-    if user_id not in locks:
-        locks[user_id] = threading.Lock()
+    if system_id not in locks:
+        locks[system_id] = threading.Lock()
 
-    with locks[user_id]:
-        recording_states[user_id] = True
+    with locks[system_id]:
+        recording_states[system_id] = True
 
         # Tạo tên file video với ID và timestamp
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
-        print(f"Starting video recording for user {user_id}... {timestamp}")
+        print(f"Starting video recording for user {system_id}... {timestamp}")
         
-        video_filename = os.path.join(video_folder, f"{user_id}_video_{timestamp}.mp4")
+        video_filename = os.path.join(video_folder, f"{system_id}_video_{timestamp}.mp4")
 
         # Initialize VideoWriter
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        video_writers[user_id] = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
+        video_writers[system_id] = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
 
-        if not video_writers[user_id].isOpened():
-            print(f"Error: Could not open VideoWriter for user {user_id}.")
-            recording_states[user_id] = False
+        if not video_writers[system_id].isOpened():
+            print(f"Error: Could not open VideoWriter for user {system_id}.")
+            recording_states[system_id] = False
             return
 
-        video_frames[user_id] = []
-        video_frames_cache[user_id] = []
-        last_time[user_id] = time()  # Initialize the last frame time
-        print(f"Recording started for user {user_id}.")
+        video_frames[system_id] = []
+        video_frames_cache[system_id] = []
+        last_time[system_id] = time()  # Initialize the last frame time
+        print(f"Recording started for user {system_id}.")
 
-def save_video(user_id):
+def save_video(system_id):
     """Saves video for a specific user."""
     global video_writers, locks
 
-    with locks[user_id]:
-        if user_id in video_writers and video_writers[user_id]:
+    with locks[system_id]:
+        if system_id in video_writers and video_writers[system_id]:
             # Đóng VideoWriter hiện tại
-            video_writers[user_id].release()
-            print(f"Video saved for user {user_id}.")
+            video_writers[system_id].release()
+            print(f"Video saved for user {system_id}.")
         else:
-            print(f"No video to save for user {user_id}.")
+            print(f"No video to save for user {system_id}.")
         
         # Chỉ cấp phát lại nếu người dùng vẫn đang ghi hình
-        # if recording_states.get(user_id, False):
-        #     start_video_recording(user_id)
+        # if recording_states.get(system_id, False):
+        #     start_video_recording(system_id)
 
-def reset_video_recording(user_id):
+def reset_video_recording(system_id):
     """Resets recording state for a specific user."""
     global recording_states, video_writers, video_frames, locks
 
-    with locks[user_id]:
-        recording_states[user_id] = False
-        video_writers.pop(user_id, None)
-        video_frames.pop(user_id, None)
-        video_frames_cache.pop(user_id, None)
-        last_time.pop(user_id, None)
+    with locks[system_id]:
+        recording_states[system_id] = False
+        video_writers.pop(system_id, None)
+        video_frames.pop(system_id, None)
+        video_frames_cache.pop(system_id, None)
+        last_time.pop(system_id, None)
 
-def handle_video_data(data, user_id):
+def handle_video_data(data, system_id):
     """Processes incoming video data for a specific user."""
     global video_writers, video_frames, last_time, locks, image_frame
 
     if 'image' not in data or not data['image']:
-        print(f"Error: No image data received for user {user_id}.")
+        print(f"Error: No image data received for user {system_id}.")
         return
 
     image_data = str(data['image'])
@@ -112,9 +119,9 @@ def handle_video_data(data, user_id):
         image = Image.open(BytesIO(img_data))
 
         # Lưu hình ảnh mới nhất
-        image_frame[user_id] = image
+        image_frame[system_id] = image
     except Exception as e:
-        print(f"Error processing image frame for user {user_id}: {e}")
+        print(f"Error processing image frame for system {system_id}: {e}")
 
     try:
         img_data = base64.b64decode(image_data)
@@ -123,121 +130,202 @@ def handle_video_data(data, user_id):
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
         current_time = time()
-        with locks[user_id]:
+        with locks[system_id]:
             # Only process the frame if sufficient time has passed
-            # if current_time - last_time.get(user_id, 0) >= FRAME_INTERVAL:
-            #     last_time[user_id] = current_time
+            # if current_time - last_time.get(system_id, 0) >= FRAME_INTERVAL:
+            #     last_time[system_id] = current_time
 
-            # Add frame to user's video frames
-            if user_id not in video_frames:
-                video_frames[user_id] = []
-            video_frames[user_id].append(frame)
+            # Add frame to system's video frames
+            if system_id not in video_frames:
+                video_frames[system_id] = []
+            video_frames[system_id].append(frame)
 
-            if user_id not in video_frames_cache:
-                video_frames_cache[user_id] = []
-            video_frames_cache[user_id].append(frame)
+            if system_id not in video_frames_cache:
+                video_frames_cache[system_id] = []
+            video_frames_cache[system_id].append(frame)
 
             # Write frame to video if recording
-            if recording_states.get(user_id, False) and user_id in video_writers:
-                video_writers[user_id].write(frame)
+            if recording_states.get(system_id, False) and system_id in video_writers:
+                video_writers[system_id].write(frame)
 
     except Exception as e:
-        print(f"Error processing video frame for user {user_id}: {e}")
+        print(f"Error processing video frame for system {system_id}: {e}")
 
 # SocketIO event listeners
 @socketio.on('start_recording')
 def handle_start_recording(data: dict):
-    user_id = data.get('user_id', 'unknown')
-    print(f"Received start_recording event for user {user_id}.")
-    start_video_recording(user_id)
+    system_id = data.get('system_id', 'unknown')
+    print(f"Received start_recording event for system {system_id}.")
+    start_video_recording(system_id)
 
-    threading.Thread(target=detection_event, args=(user_id,), daemon=True).start()
+    threading.Thread(target=detection_thread, args=(system_id,), daemon=True).start()
 
-def detection_event(user_id: str):
+def detection_thread(system_id: str):
     try:
+        socketio.sleep(15)
         while True:
-            socketio.sleep(15)
-            with locks[user_id]:
+            socketio.sleep(1)
+            with locks[system_id]:
+                if not recording_states.get(system_id, False):
+                    return
+
                 try:
-                    print(len(video_frames_cache[user_id]))
-                    if len(video_frames_cache[user_id]) == 0:
+                    print(len(video_frames_cache[system_id]))
+                    if len(video_frames_cache[system_id]) == 0:
                         continue
                 except Exception as e:
                     print(f"Error emitting tests event: {e}")
                     continue
 
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-                print(f"Detection event for user {user_id} {timestamp}.")
-                video_filename = os.path.join(video_folder, f"{user_id}_video_{timestamp}.mp4")
+                print(f"Detection event for system {system_id} {timestamp}.")
+                video_filename = os.path.join(video_folder, f"{system_id}_video_{timestamp}.mp4")
 
                 # Initialize VideoWriter
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                 video_writer_cache = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
 
                 if not video_writer_cache.isOpened():
-                    print(f"Error: Could not open VideoWriter for user {user_id}.")
+                    print(f"Error: Could not open VideoWriter for system {system_id}.")
                     return
                 
-                for frame in video_frames_cache[user_id]:
+                for frame in video_frames_cache[system_id]:
                     video_writer_cache.write(frame)
 
-                video_frames_cache[user_id] = []
+                video_frames_cache[system_id] = []
                 video_writer_cache.release()
+
+                # handle detection
+                if image_frame.get(system_id):
+                    handle_detection(image_frame[system_id], video_filename, system_id)
     except Exception as e:
-        print(f"Error emitting tests event: {e}")
+        print(f"Error detection thread: {e}")
+
+def handle_detection(image, video_url: str, system_id: str):
+    try:
+        account_infos = get_account_infos_by_id(system_id)
+
+        if not account_infos:
+            logging_error(f"No account found with system_id {system_id}")
+            return
+        
+        if not isinstance(image, np.ndarray):
+            image = np.array(image)
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        
+        # Lưu ảnh tạm thời với tên duy nhất
+        temp_image_name = f"{system_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
+        temp_image_path = os.path.join(image_folder, temp_image_name)
+        if not cv2.imwrite(temp_image_path, image):
+            logging_error("Failed to save image to {temp_image_path}")
+            return
+
+        image_url = save_file_to_firestore(temp_image_path, f"{system_id}_image_crib.jpg")
+
+        if not image_url:
+            logging_error("Error saving image to Firestore")
+            return
+        
+        data_observer(f"data_observer/{system_id}/is_updated_image", True)
+
+        # Gọi dịch vụ dự đoán
+        result = babyInCribDetectionService.predict(image)
+
+        socketio.emit('detection_result', {
+            'system_id': system_id,
+            'result': result
+        })
+
+        video_url_saved = None
+
+        # Lưu kết quả vào Firestore
+        timestamp = (datetime.now(timezone.utc) + timedelta(hours=7)).strftime('%Y-%m-%dT%H:%M:%S.000')
+        if result["id"] == 0:
+            save_log_to_firestore("image_crib", image_url, "Baby is not in crib", system_id, timestamp)
+
+            try:
+                video_url_saved = save_file_to_firestore(
+                        video_url, 
+                        f"iot/{system_id}/video_{os.path.basename(video_url)}"
+                    )
+                save_log_to_firestore("video_crib", video_url_saved, f"Error {result['message']}", system_id, (datetime.now(timezone.utc) + timedelta(hours=7)).strftime('%Y-%m-%dT%H:%M:%S.000'))
+            except Exception as e:
+                logging_error(f"Error saving video to Firestore: {e}")
+
+        elif result["id"] == 1:
+            save_log_to_firestore("image_crib", image_url, "Baby is in crib", system_id, timestamp)
+        else:
+            save_log_to_firestore("image_crib", image_url, f"Error {result['message']}", system_id, timestamp)
+
+        if result["id"] == 0:
+            for account_info in account_infos:
+                if account_info.get("enableNotification"):
+                    send_notification_to_device(
+                        account_info.get("deviceToken"),
+                        "Thông báo từ hệ thống",
+                        "Trẻ đang không an toàn. Vui lòng kiểm tra."
+                    )
+                    save_notification_to_firebase("Trẻ đang không an toàn. Vui lòng kiểm tra.", system_id, timestamp, video_url)
+
+    except Exception as e:
+        logging_error(f"Error handling detection: {e}")
+
+def logging_error(message: str):
+    socketio.emit('error', {
+        'message': message
+    })
+    print(f"Error: {message}")
 
 @socketio.on('video')
-def handle_video(data):
-    user_id = data.get('user_id', 'unknown')
-    handle_video_data(data, user_id)
+def handle_video(data: dict):
+    system_id = data.get('system_id', 'unknown')
+    handle_video_data(data, system_id)
 
 @socketio.on('stop_recording')
-def handle_stop_recording(data):
-    user_id = data.get('user_id', 'unknown')
-    print(f"Received stop_recording event for user {user_id}.")
-    save_video(user_id)
-
-def handle_stop_recording2(user_id):
-    print(f"Received stop_recording event for user {user_id}.")
-    save_video(user_id)
+def handle_stop_recording(data: dict):
+    system_id = data.get('system_id', 'unknown')
+    print(f"Received stop_recording event for user {system_id}.")
+    save_video(system_id)
+    with locks[system_id]:
+        reset_video_recording(system_id)
 
 @socketio.on('connect')
 def handle_connect():
     print("Client connected")
     socketio.emit('response', {'message': 'Server: Connection established!'})
 
-@app.route('/video_streaming/<user_id>')
-def video_streaming(user_id):
-    if user_id not in video_frames:
+@app.route('/video_streaming/<system_id>')
+def video_streaming(system_id):
+    if system_id not in video_frames:
         return Response("User not found", status=404)
-    return Response(video_stream(user_id), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(video_stream(system_id), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-def video_stream(user_id):
+def video_stream(system_id):
     global video_frames, locks
 
     while True:
-        if user_id not in video_frames:
+        if system_id not in video_frames:
             continue
 
-        with locks[user_id]:
-            if len(video_frames[user_id]) == 0:
+        with locks[system_id]:
+            if len(video_frames[system_id]) == 0:
                 continue
 
-            frame = video_frames[user_id].pop(0)
+            frame = video_frames[system_id].pop(0)
             _, buffer = cv2.imencode('.jpg', frame)
             frame_bytes = buffer.tobytes()
 
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
-@app.route('/image/<user_id>')
-def image_view(user_id):
+@app.route('/image/<system_id>')
+def image_view(system_id):
     """Trả về hình ảnh mới nhất."""
-    if user_id not in image_frame:
+    if system_id not in image_frame:
         return Response("User not found", status=404)
     if image_frame:
         img_io = BytesIO()
-        image_frame[user_id].save(img_io, 'JPEG')
+        image_frame[system_id].save(img_io, 'JPEG')
         img_io.seek(0)
         return send_file(img_io, mimetype='image/jpeg')
     return "No image available", 404
