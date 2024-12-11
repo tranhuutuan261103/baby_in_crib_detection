@@ -178,25 +178,20 @@ def handle_start_recording(data: dict):
 def detection_thread(system_id: str):
     try:
         socketio.sleep(5)
-        trying_count = 0
         while True:
             socketio.sleep(1)
             with locks[system_id]:
                 if not recording_states.get(system_id, False):
                     return
-
                 try:
-                    print(len(video_frames_cache[system_id]))
                     if len(video_frames_cache[system_id]) == 0:
-                        if trying_count >= 5:
-                            return
-                        trying_count += 1
+                        print("0", end="", flush=True)
                         continue
+                    else:
+                        print(len(video_frames_cache[system_id]))
                 except Exception as e:
                     print(f"Error emitting tests event: {e}")
                     continue
-
-                trying_count = 0
 
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
                 print(f"Detection event for system {system_id} {timestamp}.")
