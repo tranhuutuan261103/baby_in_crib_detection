@@ -155,11 +155,22 @@ def handle_video_data(data, system_id):
     except Exception as e:
         print(f"Error processing video frame for system {system_id}: {e}")
 
+def ensure_resources(system_id):
+    if system_id not in locks:
+        locks[system_id] = threading.Lock()
+    if system_id not in video_frames:
+        video_frames[system_id] = []
+    if system_id not in video_frames_cache:
+        video_frames_cache[system_id] = []
+    if system_id not in video_frames_stream:
+        video_frames_stream[system_id] = []
+
 # SocketIO event listeners
 @socketio.on('start_recording')
 def handle_start_recording(data: dict):
     system_id = data.get('system_id', 'unknown')
     print(f"Received start_recording event for system {system_id}.")
+    ensure_resources(system_id)
     start_video_recording(system_id)
 
     threading.Thread(target=detection_thread, args=(system_id,), daemon=True).start()
@@ -167,6 +178,7 @@ def handle_start_recording(data: dict):
 def detection_thread(system_id: str):
     try:
         socketio.sleep(5)
+        trying_count = 0
         while True:
             socketio.sleep(1)
             with locks[system_id]:
@@ -176,10 +188,15 @@ def detection_thread(system_id: str):
                 try:
                     print(len(video_frames_cache[system_id]))
                     if len(video_frames_cache[system_id]) == 0:
+                        if trying_count >= 5:
+                            return
+                        trying_count += 1
                         continue
                 except Exception as e:
                     print(f"Error emitting tests event: {e}")
                     continue
+
+                trying_count = 0
 
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
                 print(f"Detection event for system {system_id} {timestamp}.")
@@ -286,12 +303,19 @@ def handle_video(data: dict):
     handle_video_data(data, system_id)
 
 @socketio.on('stop_recording')
-def handle_stop_recording(data: dict):
-    system_id = data.get('system_id', 'unknown')
-    print(f"Received stop_recording event for user {system_id}.")
-    save_video(system_id)
-    with locks[system_id]:
+def handle_disconnect():
+    system_id = request.args.get('system_id', 'unknown')
+    print(f"Client with system_id {system_id} disconnected.")
+    
+    # Cleanup resources
+    with locks.get(system_id, threading.Lock()):
         reset_video_recording(system_id)
+        locks.pop(system_id, None)
+        video_frames.pop(system_id, None)
+        video_frames_cache.pop(system_id, None)
+        video_frames_stream.pop(system_id, None)
+        image_frame.pop(system_id, None)
+        recording_states.pop(system_id, None)
 
 @socketio.on('connect')
 def handle_connect():
