@@ -26,6 +26,7 @@ if not os.path.exists(video_folder):
 # User-specific data
 video_writers = {}       # {user_id: VideoWriter}
 video_frames = {}        # {user_id: []}
+video_frames_cache = {}  # {user_id: []}
 image_frame = {}         # {user_id: Image}
 recording_states = {}    # {user_id: bool}
 last_time = {}           # {user_id: float (timestamp)}
@@ -54,7 +55,7 @@ def start_video_recording(user_id):
 
         # Initialize VideoWriter
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        video_writers[user_id] = cv2.VideoWriter(video_filename, fourcc, 20.0, (640, 480))
+        video_writers[user_id] = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
 
         if not video_writers[user_id].isOpened():
             print(f"Error: Could not open VideoWriter for user {user_id}.")
@@ -62,6 +63,7 @@ def start_video_recording(user_id):
             return
 
         video_frames[user_id] = []
+        video_frames_cache[user_id] = []
         last_time[user_id] = time()  # Initialize the last frame time
         print(f"Recording started for user {user_id}.")
 
@@ -78,8 +80,8 @@ def save_video(user_id):
             print(f"No video to save for user {user_id}.")
         
         # Chỉ cấp phát lại nếu người dùng vẫn đang ghi hình
-        if recording_states.get(user_id, False):
-            start_video_recording(user_id)
+        # if recording_states.get(user_id, False):
+        #     start_video_recording(user_id)
 
 def reset_video_recording(user_id):
     """Resets recording state for a specific user."""
@@ -89,6 +91,7 @@ def reset_video_recording(user_id):
         recording_states[user_id] = False
         video_writers.pop(user_id, None)
         video_frames.pop(user_id, None)
+        video_frames_cache.pop(user_id, None)
         last_time.pop(user_id, None)
 
 def handle_video_data(data, user_id):
@@ -130,6 +133,10 @@ def handle_video_data(data, user_id):
                 video_frames[user_id] = []
             video_frames[user_id].append(frame)
 
+            if user_id not in video_frames_cache:
+                video_frames_cache[user_id] = []
+            video_frames_cache[user_id].append(frame)
+
             # Write frame to video if recording
             if recording_states.get(user_id, False) and user_id in video_writers:
                 video_writers[user_id].write(frame)
@@ -143,6 +150,41 @@ def handle_start_recording(data: dict):
     user_id = data.get('user_id', 'unknown')
     print(f"Received start_recording event for user {user_id}.")
     start_video_recording(user_id)
+
+    threading.Thread(target=detection_event, args=(user_id,), daemon=True).start()
+
+def detection_event(user_id: str):
+    try:
+        while True:
+            socketio.sleep(15)
+            with locks[user_id]:
+                try:
+                    print(len(video_frames_cache[user_id]))
+                    if len(video_frames_cache[user_id]) == 0:
+                        continue
+                except Exception as e:
+                    print(f"Error emitting tests event: {e}")
+                    continue
+
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                print(f"Detection event for user {user_id} {timestamp}.")
+                video_filename = os.path.join(video_folder, f"{user_id}_video_{timestamp}.mp4")
+
+                # Initialize VideoWriter
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                video_writer_cache = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
+
+                if not video_writer_cache.isOpened():
+                    print(f"Error: Could not open VideoWriter for user {user_id}.")
+                    return
+                
+                for frame in video_frames_cache[user_id]:
+                    video_writer_cache.write(frame)
+
+                video_frames_cache[user_id] = []
+                video_writer_cache.release()
+    except Exception as e:
+        print(f"Error emitting tests event: {e}")
 
 @socketio.on('video')
 def handle_video(data):
