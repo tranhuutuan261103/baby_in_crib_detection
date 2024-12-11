@@ -265,7 +265,7 @@ def handle_detection(image, video_url: str, system_id: str):
                         "Thông báo từ hệ thống",
                         "Trẻ đang không an toàn. Vui lòng kiểm tra."
                     )
-                    save_notification_to_firebase("Trẻ đang không an toàn. Vui lòng kiểm tra.", system_id, timestamp, video_url)
+                    save_notification_to_firebase("Trẻ đang không an toàn. Vui lòng kiểm tra.", system_id, timestamp, video_url_saved)
 
     except Exception as e:
         logging_error(f"Error handling detection: {e}")
